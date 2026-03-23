@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Issue Dependency Graph</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 20px;
+      color: #fff;
+    }
+    .stats {
+      display: flex;
+      justify-content: center;
+      gap: 30px;
+      margin-bottom: 20px;
+    }
+    .stat {
+      padding: 10px 20px;
+      border-radius: 8px;
+      background: #16213e;
+    }
+    .stat-value { font-size: 24px; font-weight: bold; }
+    .stat-label { font-size: 12px; opacity: 0.7; }
+    .stat.todo .stat-value { color: #888; }
+    .stat.in-progress .stat-value { color: #4dabf7; }
+    .stat.done .stat-value { color: #51cf66; }
+    .stat.blocked .stat-value { color: #ff6b6b; }
+    #graph-container {
+      background: #16213e;
+      border-radius: 12px;
+      padding: 20px;
+      min-height: 500px;
+      overflow: auto;
+    }
+    #graph {
+      display: flex;
+      justify-content: center;
+    }
+    .mermaid { background: transparent; }
+    .error { color: #ff6b6b; text-align: center; padding: 40px; }
+    .legend {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      margin-bottom: 15px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+    }
+    .legend-color {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+    }
+    .legend-color.todo { background: #6b7280; }
+    .legend-color.in-progress { background: #3b82f6; }
+    .legend-color.blocked { background: #ff6b6b; }
+    .legend-color.done { background: #22c55e; }
+
+    .export-btn {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 12px 24px;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: background 0.2s;
+      z-index: 1000;
+    }
+    .export-btn:hover {
+      background: #2563eb;
+    }
+    .export-btn:active {
+      transform: scale(0.98);
+    }
+
+    .filters {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    .filter-label {
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      border: 2px solid transparent;
+      transition: all 0.2s;
+      user-select: none;
+    }
+    .filter-label:hover {
+      opacity: 0.8;
+    }
+    .filter-label.active {
+      border-color: #fff;
+      box-shadow: 0 0 8px rgba(255, 255, 255, 0.3);
+    }
+    .filter-label.all {
+      background: #374151;
+      color: #fff;
+    }
+
+    /* Mermaid node styling */
+    .node rect { rx: 8; ry: 8; }
+  </style>
+</head>
+<body>
+  <button class="export-btn" onclick="exportSVG()" aria-label="Export graph as SVG">
+    📥 Export SVG
+  </button>
+
+  <h1>🔗 Issue Dependency Graph</h1>
+
+  <div class="stats">
+    <div class="stat todo">
+      <div class="stat-value" id="count-todo">-</div>
+      <div class="stat-label">Todo</div>
+    </div>
+    <div class="stat in-progress">
+      <div class="stat-value" id="count-progress">-</div>
+      <div class="stat-label">In Progress</div>
+    </div>
+    <div class="stat blocked">
+      <div class="stat-value" id="count-blocked">-</div>
+      <div class="stat-label">Blocked</div>
+    </div>
+    <div class="stat done">
+      <div class="stat-value" id="count-done">-</div>
+      <div class="stat-label">Done</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-color todo"></div> Todo</div>
+    <div class="legend-item"><div class="legend-color in-progress"></div> In Progress</div>
+    <div class="legend-item"><div class="legend-color blocked"></div> Blocked</div>
+    <div class="legend-item"><div class="legend-color done"></div> Done</div>
+  </div>
+
+  <div id="filters" class="filters"></div>
+
+  <div id="graph-container">
+    <div id="graph" class="mermaid"></div>
+  </div>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      flowchart: {
+        useMaxWidth: true,
+        htmlLabels: true,
+        curve: 'basis'
+      }
+    });
+
+    const statusColors = {
+      todo: '#6b7280',
+      in_progress: '#3b82f6',
+      blocked: '#ff6b6b',
+      done: '#22c55e'
+    };
+
+    function buildFilters() {
+      // Collect unique labels
+      const labelsSet = new Set();
+      allIssues.forEach(issue => {
+        if (issue.labels && issue.labels.length > 0) {
+          issue.labels.forEach(label => labelsSet.add(JSON.stringify(label)));
+        }
+      });
+
+      allLabels = Array.from(labelsSet).map(l => JSON.parse(l));
+
+      // Build filter UI
+      const filtersContainer = document.getElementById('filters');
+      filtersContainer.innerHTML = '';
+
+      // Add "All" filter
+      const allBtn = document.createElement('div');
+      allBtn.className = 'filter-label all active';
+      allBtn.textContent = 'All Issues';
+      allBtn.onclick = () => filterByLabel(null);
+      filtersContainer.appendChild(allBtn);
+
+      // Add label filters
+      allLabels.forEach(label => {
+        const btn = document.createElement('div');
+        btn.className = 'filter-label';
+        btn.textContent = label.name;
+        btn.style.backgroundColor = label.color || '#6b7280';
+        btn.style.color = '#fff';
+        btn.onclick = () => filterByLabel(label.id);
+        btn.dataset.labelId = label.id;
+        filtersContainer.appendChild(btn);
+      });
+    }
+
+    function filterByLabel(labelId) {
+      selectedLabelId = labelId;
+
+      // Update active state
+      document.querySelectorAll('.filter-label').forEach(btn => {
+        btn.classList.remove('active');
+      });
+
+      if (labelId === null) {
+        document.querySelector('.filter-label.all').classList.add('active');
+      } else {
+        document.querySelector(`[data-label-id="${labelId}"]`).classList.add('active');
+      }
+
+      renderGraph();
+    }
+
+    async function loadGraph() {
+      try {
+        const res = await fetch('/api/issues');
+        const issues = await res.json();
+
+        if (issues.error) throw new Error(issues.error);
+
+        // Store all issues
+        allIssues = issues;
+        issuesMap = {};
+        issues.forEach(issue => issuesMap[issue.id] = issue);
+
+        // Build filters
+        buildFilters();
+
+        // Render graph
+        renderGraph();
+
+      } catch (err) {
+        console.error(err);
+        document.getElementById('graph').innerHTML = `<div class="error">Error loading issues: ${err.message}</div>`;
+      }
+    }
+
+    function renderGraph() {
+      try {
+        // Filter issues
+        const issues = selectedLabelId === null
+          ? allIssues
+          : allIssues.filter(issue =>
+              issue.labels && issue.labels.some(l => l.id === selectedLabelId)
+            );
+
+        // Update stats
+        const counts = { todo: 0, in_progress: 0, blocked: 0, done: 0 };
+        issues.forEach(i => counts[i.status] = (counts[i.status] || 0) + 1);
+        document.getElementById('count-todo').textContent = counts.todo || 0;
+        document.getElementById('count-progress').textContent = counts.in_progress || 0;
+        document.getElementById('count-blocked').textContent = counts.blocked || 0;
+        document.getElementById('count-done').textContent = counts.done || 0;
+
+        // Build Mermaid graph
+        let diagram = 'flowchart TD\n';
+        
+        // Define nodes with styling
+        issues.forEach(issue => {
+          const label = issue.identifier ? `${issue.identifier}: ${issue.title}` : issue.title;
+          const safeLabel = label.replace(/"/g, "'").substring(0, 50);
+          const nodeId = `node_${issue.id.replace(/-/g, '_')}`;
+          diagram += `  ${nodeId}["${safeLabel}"]\n`;
+        });
+
+        // Add edges for parent-child relationships
+        issues.forEach(issue => {
+          if (issue.parent_id) {
+            const parentNode = `node_${issue.parent_id.replace(/-/g, '_')}`;
+            const childNode = `node_${issue.id.replace(/-/g, '_')}`;
+            diagram += `  ${parentNode} --> ${childNode}\n`;
+          }
+        });
+
+        // Style nodes by status
+        issues.forEach(issue => {
+          const nodeId = `node_${issue.id.replace(/-/g, '_')}`;
+          const color = statusColors[issue.status] || statusColors.todo;
+          diagram += `  style ${nodeId} fill:${color},stroke:${color},color:#fff\n`;
+        });
+
+        // Add click handlers
+        issues.forEach(issue => {
+          const nodeId = `node_${issue.id.replace(/-/g, '_')}`;
+          diagram += `  click ${nodeId} call showIssue("${issue.id}")\n`;
+        });
+
+        console.log('Mermaid diagram:', diagram);
+
+        // Render
+        const container = document.getElementById('graph');
+        container.innerHTML = diagram;
+        mermaid.render('mermaid-svg', diagram).then(({ svg }) => {
+          container.innerHTML = svg;
+        });
+
+      } catch (err) {
+        console.error(err);
+        document.getElementById('graph').innerHTML = `<div class="error">Error rendering graph: ${err.message}</div>`;
+      }
+    }
+
+    // Store issues for navigation and filtering
+    let issuesMap = {};
+    let allIssues = [];
+    let allLabels = [];
+    let selectedLabelId = null;
+
+    // Global callback for node clicks
+    window.showIssue = function(issueId) {
+      const issue = issuesMap[issueId];
+      if (issue && issue.identifier) {
+        // Extract company prefix from identifier (e.g., "REBAA" from "REBAA-4")
+        const prefix = issue.identifier.split('-')[0];
+        const paperclipUrl = `/${prefix}/issues/${issue.identifier}`;
+        window.open(paperclipUrl, '_blank');
+      } else {
+        console.warn('Issue not found or missing identifier:', issueId);
+      }
+    };
+
+    // Export graph as SVG
+    window.exportSVG = function() {
+      const svgElement = document.querySelector('#graph svg');
+      if (!svgElement) {
+        alert('No graph to export. Please wait for the graph to load.');
+        return;
+      }
+
+      // Clone the SVG to avoid modifying the displayed version
+      const svgClone = svgElement.cloneNode(true);
+
+      // Add white background for better visibility when opened separately
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('width', '100%');
+      rect.setAttribute('height', '100%');
+      rect.setAttribute('fill', '#16213e');
+      svgClone.insertBefore(rect, svgClone.firstChild);
+
+      // Serialize the SVG
+      const serializer = new XMLSerializer();
+      const svgString = serializer.serializeToString(svgClone);
+
+      // Create blob and download
+      const blob = new Blob([svgString], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `issue-dependency-graph-${Date.now()}.svg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    };
+
+    loadGraph();
+  </script>
+</body>
+</html>
